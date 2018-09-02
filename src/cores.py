@@ -52,6 +52,12 @@ class Data:
 
         self.features = []
 
+        if self.env_cols is not None:
+            feature0 = np.zeros(len(self.env_cols) * len(self.data_cols))
+            
+        else:
+            feature0 = np.zeros(len(self.data_cols))
+
         return
 
     def decompose(self):
