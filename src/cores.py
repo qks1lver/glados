@@ -4,9 +4,14 @@
 import argparse
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+import pickle
+import torch
+import torch.nn.functional as F
 from random import sample
 from datetime import datetime
-from sklearn.preprocessing import LabelEncoder
+from sklearn.preprocessing import MultiLabelBinarizer, LabelEncoder
 from sklearn.decomposition import KernelPCA
 
 
@@ -22,11 +27,13 @@ class Data:
         self.p_data = p_data
         self.variable_types = []
         self.df = pd.DataFrame()
-        self.features = []
+        self.features = None
+        self.n_features = 0
         self.id_col = None
         self.ids = []
         self.env_cols = None
-        self.envs = {}
+        self.envs = None
+        self.env_coder = MultiLabelBinarizer()
         self.data_cols = None
 
     def load_data(self, p_data=''):
@@ -50,39 +57,76 @@ class Data:
         if self.df.empty:
             self.load_data()
 
-        self.features = []
+        self.features = None
 
-        if self.env_cols is not None:
-            feature0 = np.zeros(len(self.env_cols) * len(self.data_cols))
+        if self.envs is not None:
+            # Has envs
+            features = np.zeros([len(self.ids), len(self.envs), len(self.data_cols)])
+
+            for r,_ in enumerate(self.df.iterrows()):
+                data_id = self.ids.index(self.df.iloc[r][self.id_col].values[0])
+                env_id = self._get_env_idx(self.env_coder.transform([self.df.iloc[r][self.env_cols].values]))
+
+                features[data_id][env_id] = self.df.iloc[r][self.data_cols]
+
+            self.features = np.concatenate(np.transpose(features, (1,0,2)), axis=1)
             
         else:
-            feature0 = np.zeros(len(self.data_cols))
+            # No envs
+            features = []
+            for data_id in self.ids:
+                features.append(self.df.loc[data_id][self.data_cols])
+
+            self.features = np.array(features)
+
+        self.n_features = len(self.features[0])
 
         return
 
     def decompose(self):
 
-        if self.features.empty:
+        if self.features is None:
             self.featurize()
 
-        decomposer = KernelPCA()
+        decomposer = KernelPCA(remove_zero_eig=False)
 
-        data_decomp = decomposer.fit_transform(self.features.values)
+        data_decomp = decomposer.fit_transform(self.features)
 
-        print('First 3: %.3f' % (np.sum(decomposer.lambdas_[:3]) / np.sum(decomposer.lambdas_)))
+        print('First 3: %.3f' % (np.sum(decomposer.lambdas_[:1]) / np.sum(decomposer.lambdas_)))
 
         return data_decomp
+
+    def visualize(self):
+
+        sns.set(style='ticks')
+
+        cols = []
+        for c in self.data_cols:
+            if len(self.df[c].unique()) > 1:
+                cols.append(c)
+            else:
+                print('Ignore column "%s" due to lack of variation' % c)
+
+        sns.pairplot(self.df, vars=cols, kind='reg', hue=self.env_cols[0])
+
+        plt.show()
+
+        return
 
     def _set_id_col(self):
 
         id_col = self.variable_types == 'id'
+
+        if not id_col.any():
+
+            raise ValueError('Must have an "id" column.')
 
         if np.sum(id_col) > 1:
 
             raise ValueError('Cannot have more than one "id" column.')
 
         self.id_col = self.df.columns[id_col]
-        self.ids = self.df[self.id_col[0]].unique()
+        self.ids = list(self.df[self.id_col[0]].unique())
 
         return
 
@@ -91,7 +135,8 @@ class Data:
         env_cols = self.variable_types == 'env'
 
         self.env_cols = self.df.columns[env_cols]
-        self.envs = {c:self.df[c].unique() for c in self.env_cols}
+        envs = self.env_coder.fit_transform(self.df[self.env_cols].values)
+        self.envs = np.unique(envs, axis=0)
 
         return
 
@@ -103,6 +148,10 @@ class Data:
 
         return
 
+    def _get_env_idx(self, env_code):
+
+        return np.where((self.envs == env_code).all(axis=1))[0][0]
+
 class Project:
 
     def __init__(self, p_project='', p_train_data='', p_eval_data='', p_predict_data=''):
@@ -113,47 +162,57 @@ class Project:
         self.eval_data = Data(p_eval_data).load_data()
         self.predict_data = Data(p_predict_data).load_data()
 
-    def new_project(self, p_project=''):
+    def save_project(self, p_project=''):
 
         if p_project:
-
             self.p_project = p_project
-
         else:
+            self.p_project = _d_projects_ + 'glados_%s_%s.pkl' % (datetime.now().strftime('%Y%m%d'), ''.join(sample('abcdefgh12345678', 6)))
 
-            self.p_project = _d_projects_ + 'project_%s_%s.glados' % (datetime.now().strftime('%Y%m%d'), ''.join(sample('abcdefgh12345678', 6)))
-
-        if self.p_project:
-
-            with open(self.p_project, 'w+') as f:
-
-                # TODO create new project file
-
-                _ = f.write('')
+        pickle.dump(self, open(self.p_project, 'wb'))
 
         return self.p_project
 
     def load_project(self, p_project=''):
 
         if p_project:
-
             self.p_project = p_project
 
-        # TODO read in project
+        proj = pickle.load(open(self.p_project, 'rb'))
+        if isinstance(proj, Project):
+            self.p_project = proj.p_project
+            self.train_data = proj.train_data
+            self.eval_data = proj.eval_data
+            self.predict_data = proj.predict_data
+        else:
+            raise ValueError('Not a Glados Project class object.')
 
         return
 
     def assess_data(self):
 
-        """
-        Let's first examine for:
-            1. Leak
-            2. Clusters
-
-        :return:
-        """
-
         return
+
+class NNModel(torch.nn.Module):
+
+    def __init__(self, data=Data()):
+        super(NNModel, self).__init__()
+
+        self.data = data
+
+        # layers
+        self.fc1 = torch.nn.Linear(self.data.n_features, 2 * self.data.n_features)
+        self.fc2 = torch.nn.Linear(2 * self.data.n_features, 4 * self.data.n_features)
+        self.fc3 = torch.nn.Linear(4 * self.data.n_features, self.data.n_features)
+
+    def forward(self, x):
+
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        x = self.fc3(x)
+
+        return x
+
 
 # Run
 if __name__ == '__main__':
@@ -162,14 +221,13 @@ if __name__ == '__main__':
 
     parser.add_argument('-n', dest='path_new_project', action='store', nargs='?', default=-1, type=open, help='New project')
     parser.add_argument('-l', dest='path_project', action='store', nargs=1, default='', help='Load a project')
-    parser.add_argument('-i', dest='test', help='try')
+    parser.add_argument('-r', dest='run', help='try')
+    parser.add_argument('--test', dest='test', action='store_true', help='Test build')
 
     args = parser.parse_args()
 
-    project = Project()
+    if args.test:
 
-    if args.path_new_project != -1:
-        project.new_project(args.path_new_project)
-
-    if args.path_project:
-        project.load_project(args.path_project)
+        d = Data().load_data('../test/test.csv')
+        x = d.decompose()
+        d.visualize()
