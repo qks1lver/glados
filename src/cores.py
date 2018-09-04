@@ -11,7 +11,7 @@ import torch
 import torch.nn.functional as F
 from random import sample
 from datetime import datetime
-from sklearn.preprocessing import MultiLabelBinarizer, LabelEncoder
+from sklearn.preprocessing import MultiLabelBinarizer
 from sklearn.decomposition import KernelPCA
 
 
@@ -96,18 +96,26 @@ class Data:
 
         return data_decomp
 
-    def visualize(self):
+    def visualize(self, env_var=0):
 
         sns.set(style='ticks')
 
+        env_classes = self.df[self.env_cols[env_var]].unique()
+
         cols = []
         for c in self.data_cols:
-            if len(self.df[c].unique()) > 1:
+            is_unique = True
+            for v in env_classes:
+                if len(self.df[self.df[self.env_cols[env_var]] == v][c].unique()) < 2:
+                    is_unique = False
+                    break
+
+            if is_unique:
                 cols.append(c)
             else:
                 print('Ignore column "%s" due to lack of variation' % c)
 
-        sns.pairplot(self.df, vars=cols, kind='reg', hue=self.env_cols[0])
+        sns.pairplot(self.df, vars=cols, kind='reg', hue=self.env_cols[env_var])
 
         plt.show()
 
