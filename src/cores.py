@@ -9,6 +9,7 @@ import seaborn as sns
 import pickle
 import torch
 import torch.nn.functional as F
+from scipy import stats
 from random import sample
 from datetime import datetime
 from sklearn.preprocessing import MultiLabelBinarizer
@@ -22,12 +23,14 @@ _d_test_= '../test/'
 # Classes
 class Data:
 
-    def __init__(self, p_data=''):
+    def __init__(self, p_data='', verbose=False):
 
         self.p_data = p_data
+        self.verbose = verbose
+
         self.variable_types = []
         self.df = pd.DataFrame()
-        self.features = None
+        self.features = pd.DataFrame()
         self.n_features = 0
         self.id_col = None
         self.ids = []
@@ -57,8 +60,6 @@ class Data:
         if self.df.empty:
             self.load_data()
 
-        self.features = None
-
         if self.envs is not None:
             # Has envs
             features = np.zeros([len(self.ids), len(self.envs), len(self.data_cols)])
@@ -69,7 +70,7 @@ class Data:
 
                 features[data_id][env_id] = self.df.iloc[r][self.data_cols]
 
-            self.features = np.concatenate(np.transpose(features, (1,0,2)), axis=1)
+            self.features = pd.DataFrame(np.concatenate(np.transpose(features, (1,0,2)), axis=1))
             
         else:
             # No envs
@@ -77,7 +78,7 @@ class Data:
             for data_id in self.ids:
                 features.append(self.df.loc[data_id][self.data_cols])
 
-            self.features = np.array(features)
+            self.features = pd.DataFrame(np.array(features))
 
         self.n_features = len(self.features[0])
 
@@ -90,7 +91,7 @@ class Data:
 
         decomposer = KernelPCA(remove_zero_eig=False)
 
-        data_decomp = decomposer.fit_transform(self.features)
+        data_decomp = decomposer.fit_transform(self.features.values)
 
         print('First 3: %.3f' % (np.sum(decomposer.lambdas_[:1]) / np.sum(decomposer.lambdas_)))
 
@@ -197,7 +198,19 @@ class Project:
 
         return
 
-    def assess_data(self):
+    def analyze_data(self):
+
+        col0 = self.train_data.data_cols[0]
+        col1 = self.train_data.data_cols[1]
+        s, p = stats.ttest_rel(self.train_data.df[col0], self.train_data.df[col1])
+        print('Stat: %.4f (%.4f)' % (s,p))
+
+        print(self.train_data.df.describe())
+
+        self.train_data.featurize()
+        print(self.train_data.features.describe())
+        sns.barplot(data=self.train_data.features)
+        plt.show()
 
         return
 
@@ -236,6 +249,5 @@ if __name__ == '__main__':
 
     if args.test:
 
-        d = Data().load_data('../test/test.csv')
-        x = d.decompose()
-        d.visualize()
+        p = Project(p_train_data='../test/test.csv')
+        p.analyze_data()
