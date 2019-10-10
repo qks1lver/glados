@@ -1,24 +1,16 @@
 #!/usr/bin/env python3
 
 # Import
-import argparse
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
 import pickle
 import torch
 import torch.nn.functional as F
 from scipy import stats
-from random import sample
-from datetime import datetime
 from sklearn.preprocessing import MultiLabelBinarizer
 from sklearn.decomposition import KernelPCA
+import pdb
 
-
-# Default paths
-_d_projects_ = '../projects/'
-_d_test_= '../test/'
 
 # Classes
 class Data:
@@ -38,6 +30,7 @@ class Data:
         self.envs = None
         self.env_coder = MultiLabelBinarizer()
         self.data_cols = None
+        self.feature_desc = None
 
     def load_data(self, p_data=''):
 
@@ -55,6 +48,12 @@ class Data:
 
         return self
 
+    def statistics(self):
+
+        # TODO
+
+        return
+
     def featurize(self):
 
         if self.df.empty:
@@ -63,6 +62,7 @@ class Data:
         if self.envs is not None:
             # Has envs
             features = np.zeros([len(self.ids), len(self.envs), len(self.data_cols)])
+            feature_desc = []
 
             for r,_ in enumerate(self.df.iterrows()):
                 data_id = self.ids.index(self.df.iloc[r][self.id_col].values[0])
@@ -70,7 +70,13 @@ class Data:
 
                 features[data_id][env_id] = self.df.iloc[r][self.data_cols]
 
+            for e in self.envs:
+                x = ':'.join(self.env_coder.classes_[e.astype(bool)])
+                for c in self.data_cols:
+                    feature_desc.append('%s:%s' % (x,c))
+
             self.features = pd.DataFrame(np.concatenate(np.transpose(features, (1,0,2)), axis=1))
+            self.feature_desc = feature_desc
             
         else:
             # No envs
@@ -84,7 +90,7 @@ class Data:
 
         return
 
-    def decompose(self):
+    def decompose(self, ndim=2):
 
         if self.features is None:
             self.featurize()
@@ -93,11 +99,14 @@ class Data:
 
         data_decomp = decomposer.fit_transform(self.features.values)
 
-        print('First 3: %.3f' % (np.sum(decomposer.lambdas_[:1]) / np.sum(decomposer.lambdas_)))
+        print('\nTop %d components: %.3f' % (ndim, float(np.sum(decomposer.lambdas_[:ndim]) / np.sum(decomposer.lambdas_))))
 
         return data_decomp
 
     def visualize(self, env_var=0):
+
+        import matplotlib.pyplot as plt
+        import seaborn as sns
 
         sns.set(style='ticks')
 
@@ -116,7 +125,7 @@ class Data:
             else:
                 print('Ignore column "%s" due to lack of variation' % c)
 
-        sns.pairplot(self.df, vars=cols, kind='reg', hue=self.env_cols[env_var])
+        g = sns.pairplot(self.df, vars=cols, kind='reg', hue=self.env_cols[env_var], height=2, aspect=1.)
 
         plt.show()
 
@@ -126,7 +135,7 @@ class Data:
 
         id_col = self.variable_types == 'id'
 
-        if not id_col.any():
+        if not np.any(id_col):
 
             raise ValueError('Must have an "id" column.')
 
@@ -159,7 +168,7 @@ class Data:
 
     def _get_env_idx(self, env_code):
 
-        return np.where((self.envs == env_code).all(axis=1))[0][0]
+        return np.where(np.all(self.envs == env_code, axis=1))[0][0]
 
 class Project:
 
@@ -173,10 +182,7 @@ class Project:
 
     def save_project(self, p_project=''):
 
-        if p_project:
-            self.p_project = p_project
-        else:
-            self.p_project = _d_projects_ + 'glados_%s_%s.pkl' % (datetime.now().strftime('%Y%m%d'), ''.join(sample('abcdefgh12345678', 6)))
+        self.p_project = p_project
 
         pickle.dump(self, open(self.p_project, 'wb'))
 
@@ -198,7 +204,7 @@ class Project:
 
         return
 
-    def analyze_data(self):
+    def analyze_data(self, plot=False):
 
         col0 = self.train_data.data_cols[0]
         col1 = self.train_data.data_cols[1]
@@ -209,8 +215,10 @@ class Project:
 
         self.train_data.featurize()
         print(self.train_data.features.describe())
-        sns.barplot(data=self.train_data.features)
-        plt.show()
+        self.train_data.decompose()
+
+        if plot:
+            self.train_data.visualize()
 
         return
 
@@ -233,21 +241,3 @@ class NNModel(torch.nn.Module):
         x = self.fc3(x)
 
         return x
-
-
-# Run
-if __name__ == '__main__':
-
-    parser = argparse.ArgumentParser(description='Just keep on trying until you run out of cakes')
-
-    parser.add_argument('-n', dest='path_new_project', action='store', nargs='?', default=-1, type=open, help='New project')
-    parser.add_argument('-l', dest='path_project', action='store', nargs=1, default='', help='Load a project')
-    parser.add_argument('-r', dest='run', help='try')
-    parser.add_argument('--test', dest='test', action='store_true', help='Test build')
-
-    args = parser.parse_args()
-
-    if args.test:
-
-        p = Project(p_train_data='../test/test.csv')
-        p.analyze_data()
